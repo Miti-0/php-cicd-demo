@@ -1,4 +1,4 @@
-name: PHP CI/CD
+name: PHP to GitHub Pages CI/CD
 
 on:
   push:
@@ -10,63 +10,57 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Setup Pages
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: pages
+        uses: actions/configure-pages@v5
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
-          tools: composer, phpunit
           coverage: none
 
       - name: Validate PHP syntax
         run: find . -maxdepth 3 -name "*.php" -not -path "./vendor/*" -print0 | xargs -0 -n1 php -l
 
-      - name: Install Composer dependencies
-        if: hashFiles('composer.json') != ''
-        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+      - name: Render PHP to static HTML
+        run: |
+          rm -rf dist
+          mkdir -p dist
+          php index.php > dist/index.html
+          ls -la dist
 
-      - name: Run PHPUnit tests
-        if: hashFiles('phpunit.xml', 'phpunit.xml.dist') != ''
-        run: vendor/bin/phpunit
+      - name: Upload artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
 
   deploy:
-    needs: test
+    needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup SSH key
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          if [ -n "$KNOWN_HOSTS" ]; then
-            echo "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -H "${{ vars.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
-          fi
-
-      - name: Deploy PHP files to server
-        run: |
-          rsync -az --delete \
-            --exclude='.git/' \
-            --exclude='.github/' \
-            --exclude='tests/' \
-            --exclude='phpunit.xml*' \
-            ./ "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}:${{ vars.DEPLOY_PATH }}"
-
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
